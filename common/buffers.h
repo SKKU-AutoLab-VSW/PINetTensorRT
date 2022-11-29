@@ -1,71 +1,36 @@
 /*
- * Copyright 1993-2019 NVIDIA Corporation.  All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * NOTICE TO LICENSEE:
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This source code and/or documentation ("Licensed Deliverables") are
- * subject to NVIDIA intellectual property rights under U.S. and
- * international Copyright laws.
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
- * These Licensed Deliverables contained herein is PROPRIETARY and
- * CONFIDENTIAL to NVIDIA and is being provided under the terms and
- * conditions of a form of NVIDIA software license agreement by and
- * between NVIDIA and Licensee ("License Agreement") or electronically
- * accepted by Licensee.  Notwithstanding any terms or conditions to
- * the contrary in the License Agreement, reproduction or disclosure
- * of the Licensed Deliverables to any third party without the express
- * written consent of NVIDIA is prohibited.
- *
- * NOTWITHSTANDING ANY TERMS OR CONDITIONS TO THE CONTRARY IN THE
- * LICENSE AGREEMENT, NVIDIA MAKES NO REPRESENTATION ABOUT THE
- * SUITABILITY OF THESE LICENSED DELIVERABLES FOR ANY PURPOSE.  IT IS
- * PROVIDED "AS IS" WITHOUT EXPRESS OR IMPLIED WARRANTY OF ANY KIND.
- * NVIDIA DISCLAIMS ALL WARRANTIES WITH REGARD TO THESE LICENSED
- * DELIVERABLES, INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY,
- * NONINFRINGEMENT, AND FITNESS FOR A PARTICULAR PURPOSE.
- * NOTWITHSTANDING ANY TERMS OR CONDITIONS TO THE CONTRARY IN THE
- * LICENSE AGREEMENT, IN NO EVENT SHALL NVIDIA BE LIABLE FOR ANY
- * SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL DAMAGES, OR ANY
- * DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
- * WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS
- * ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE
- * OF THESE LICENSED DELIVERABLES.
- *
- * U.S. Government End Users.  These Licensed Deliverables are a
- * "commercial item" as that term is defined at 48 C.F.R. 2.101 (OCT
- * 1995), consisting of "commercial computer software" and "commercial
- * computer software documentation" as such terms are used in 48
- * C.F.R. 12.212 (SEPT 1995) and is provided to the U.S. Government
- * only as a commercial end item.  Consistent with 48 C.F.R.12.212 and
- * 48 C.F.R. 227.7202-1 through 227.7202-4 (JUNE 1995), all
- * U.S. Government End Users acquire the Licensed Deliverables with
- * only those rights set forth herein.
- *
- * Any use of the Licensed Deliverables in individual and commercial
- * software must include, in the user documentation and internal
- * comments to the code, the above Disclaimer and U.S. Government End
- * Users Notice.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-
 #ifndef TENSORRT_BUFFERS_H
 #define TENSORRT_BUFFERS_H
 
 #include "NvInfer.h"
-#include "half.h"
 #include "common.h"
-#include <cuda_runtime_api.h>
+#include "half.h"
 #include <cassert>
+#include <cuda_runtime_api.h>
 #include <iostream>
 #include <iterator>
 #include <memory>
+#include <new>
 #include <numeric>
 #include <string>
 #include <vector>
-#include <new>
 
-using namespace std;
-
-namespace common
+namespace samplesCommon
 {
 
 //!
@@ -144,7 +109,10 @@ public:
     //!
     //! \brief Returns pointer to underlying array.
     //!
-    void* data() { return mBuffer; }
+    void* data()
+    {
+        return mBuffer;
+    }
 
     //!
     //! \brief Returns pointer to underlying array.
@@ -167,7 +135,7 @@ public:
     //!
     size_t nbBytes() const
     {
-        return this->size() * common::getElementSize(mType);
+        return this->size() * samplesCommon::getElementSize(mType);
     }
 
     //!
@@ -192,7 +160,7 @@ public:
     //!
     void resize(const nvinfer1::Dims& dims)
     {
-        return this->resize(common::volume(dims));
+        return this->resize(samplesCommon::volume(dims));
     }
 
     ~GenericBuffer()
@@ -211,13 +179,19 @@ private:
 class DeviceAllocator
 {
 public:
-    bool operator()(void** ptr, size_t size) const { return cudaMalloc(ptr, size) == cudaSuccess; }
+    bool operator()(void** ptr, size_t size) const
+    {
+        return cudaMalloc(ptr, size) == cudaSuccess;
+    }
 };
 
 class DeviceFree
 {
 public:
-    void operator()(void* ptr) const { cudaFree(ptr); }
+    void operator()(void* ptr) const
+    {
+        cudaFree(ptr);
+    }
 };
 
 class HostAllocator
@@ -233,7 +207,10 @@ public:
 class HostFree
 {
 public:
-    void operator()(void* ptr) const { free(ptr); }
+    void operator()(void* ptr) const
+    {
+        free(ptr);
+    }
 };
 
 using DeviceBuffer = GenericBuffer<DeviceAllocator, DeviceFree>;
@@ -265,15 +242,18 @@ public:
     //!
     //! \brief Create a BufferManager for handling buffer interactions with engine.
     //!
-    BufferManager(std::shared_ptr<nvinfer1::ICudaEngine> engine, const int& batchSize, const nvinfer1::IExecutionContext* context = nullptr)
+    BufferManager(std::shared_ptr<nvinfer1::ICudaEngine> engine, const int batchSize = 0,
+        const nvinfer1::IExecutionContext* context = nullptr)
         : mEngine(engine)
         , mBatchSize(batchSize)
     {
+        // Full Dims implies no batch size.
+        assert(engine->hasImplicitBatchDimension() || mBatchSize == 0);
         // Create host and device buffers
         for (int i = 0; i < mEngine->getNbBindings(); i++)
         {
             auto dims = context ? context->getBindingDimensions(i) : mEngine->getBindingDimensions(i);
-            size_t vol = context ? 1 : static_cast<size_t>(mBatchSize);
+            size_t vol = context || !mBatchSize ? 1 : static_cast<size_t>(mBatchSize);
             nvinfer1::DataType type = mEngine->getBindingDataType(i);
             int vecDim = mEngine->getBindingVectorizedDim(i);
             if (-1 != vecDim) // i.e., 0 != lgScalarsPerVector
@@ -282,7 +262,7 @@ public:
                 dims.d[vecDim] = divUp(dims.d[vecDim], scalarsPerVec);
                 vol *= scalarsPerVec;
             }
-            vol *= common::volume(dims);
+            vol *= samplesCommon::volume(dims);
             std::unique_ptr<ManagedBuffer> manBuf{new ManagedBuffer()};
             manBuf->deviceBuffer = DeviceBuffer(vol, type);
             manBuf->hostBuffer = HostBuffer(vol, type);
@@ -295,24 +275,36 @@ public:
     //! \brief Returns a vector of device buffers that you can use directly as
     //!        bindings for the execute and enqueue methods of IExecutionContext.
     //!
-    std::vector<void*>& getDeviceBindings() { return mDeviceBindings; }
+    std::vector<void*>& getDeviceBindings()
+    {
+        return mDeviceBindings;
+    }
 
     //!
     //! \brief Returns a vector of device buffers.
     //!
-    const std::vector<void*>& getDeviceBindings() const { return mDeviceBindings; }
+    const std::vector<void*>& getDeviceBindings() const
+    {
+        return mDeviceBindings;
+    }
 
     //!
     //! \brief Returns the device buffer corresponding to tensorName.
     //!        Returns nullptr if no such tensor can be found.
     //!
-    void* getDeviceBuffer(const std::string& tensorName) const { return getBuffer(false, tensorName); }
+    void* getDeviceBuffer(const std::string& tensorName) const
+    {
+        return getBuffer(false, tensorName);
+    }
 
     //!
     //! \brief Returns the host buffer corresponding to tensorName.
     //!        Returns nullptr if no such tensor can be found.
     //!
-    void* getHostBuffer(const std::string& tensorName) const { return getBuffer(true, tensorName); }
+    void* getHostBuffer(const std::string& tensorName) const
+    {
+        return getBuffer(true, tensorName);
+    }
 
     //!
     //! \brief Returns the size of the host and device buffers that correspond to tensorName.
@@ -324,36 +316,6 @@ public:
         if (index == -1)
             return kINVALID_SIZE_VALUE;
         return mManagedBuffers[index]->hostBuffer.nbBytes();
-    }
-
-    //!
-    //! \brief Dump host buffer with specified tensorName to ostream.
-    //!        Prints error message to std::ostream if no such tensor can be found.
-    //!
-    void dumpBuffer(std::ostream& os, const std::string& tensorName)
-    {
-        int index = mEngine->getBindingIndex(tensorName.c_str());
-        if (index == -1)
-        {
-            os << "Invalid tensor name" << std::endl;
-            return;
-        }
-        void* buf = mManagedBuffers[index]->hostBuffer.data();
-        size_t bufSize = mManagedBuffers[index]->hostBuffer.nbBytes();
-        nvinfer1::Dims bufDims = mEngine->getBindingDimensions(index);
-        size_t rowCount = static_cast<size_t>(bufDims.nbDims >= 1 ? bufDims.d[bufDims.nbDims - 1] : mBatchSize);
-
-        os << "[" << mBatchSize;
-        for (int i = 0; i < bufDims.nbDims; i++)
-            os << ", " << bufDims.d[i];
-        os << "]" << std::endl;
-        switch (mEngine->getBindingDataType(index))
-        {
-        case nvinfer1::DataType::kINT32: print<int32_t>(os, buf, bufSize, rowCount); break;
-        case nvinfer1::DataType::kFLOAT: print<float>(os, buf, bufSize, rowCount); break;
-        case nvinfer1::DataType::kHALF: print<half_float::half>(os, buf, bufSize, rowCount); break;
-        case nvinfer1::DataType::kINT8: assert(0 && "Int8 network-level input and output is not supported"); break;
-        }
     }
 
     //!
@@ -388,27 +350,38 @@ public:
     //!
     //! \brief Copy the contents of input host buffers to input device buffers synchronously.
     //!
-    void copyInputToDevice() { memcpyBuffers(true, false, false); }
+    void copyInputToDevice()
+    {
+        memcpyBuffers(true, false, false);
+    }
 
     //!
     //! \brief Copy the contents of output device buffers to output host buffers synchronously.
     //!
-    void copyOutputToHost() { memcpyBuffers(false, true, false); }
+    void copyOutputToHost()
+    {
+        memcpyBuffers(false, true, false);
+    }
 
     //!
     //! \brief Copy the contents of input host buffers to input device buffers asynchronously.
     //!
-    void copyInputToDeviceAsync(const cudaStream_t& stream = 0) { memcpyBuffers(true, false, true, stream); }
+    void copyInputToDeviceAsync(const cudaStream_t& stream = 0)
+    {
+        memcpyBuffers(true, false, true, stream);
+    }
 
     //!
     //! \brief Copy the contents of output device buffers to output host buffers asynchronously.
     //!
-    void copyOutputToHostAsync(const cudaStream_t& stream = 0) { memcpyBuffers(false, true, true, stream); }
+    void copyOutputToHostAsync(const cudaStream_t& stream = 0)
+    {
+        memcpyBuffers(false, true, true, stream);
+    }
 
     ~BufferManager() = default;
 
 private:
-
     void* getBuffer(const bool isHost, const std::string& tensorName) const
     {
         int index = mEngine->getBindingIndex(tensorName.c_str());
@@ -438,11 +411,11 @@ private:
     }
 
     std::shared_ptr<nvinfer1::ICudaEngine> mEngine;              //!< The pointer to the engine
-    int mBatchSize;                                              //!< The batch size
+    int mBatchSize;                                              //!< The batch size for legacy networks, 0 otherwise.
     std::vector<std::unique_ptr<ManagedBuffer>> mManagedBuffers; //!< The vector of pointers to managed buffers
     std::vector<void*> mDeviceBindings;                          //!< The vector of device buffers needed for engine execution
 };
 
-} // namespace common
+} // namespace samplesCommon
 
 #endif // TENSORRT_BUFFERS_H

@@ -1,63 +1,36 @@
 /*
- * Copyright 1993-2019 NVIDIA Corporation.  All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * NOTICE TO LICENSEE:
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This source code and/or documentation ("Licensed Deliverables") are
- * subject to NVIDIA intellectual property rights under U.S. and
- * international Copyright laws.
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
- * These Licensed Deliverables contained herein is PROPRIETARY and
- * CONFIDENTIAL to NVIDIA and is being provided under the terms and
- * conditions of a form of NVIDIA software license agreement by and
- * between NVIDIA and Licensee ("License Agreement") or electronically
- * accepted by Licensee.  Notwithstanding any terms or conditions to
- * the contrary in the License Agreement, reproduction or disclosure
- * of the Licensed Deliverables to any third party without the express
- * written consent of NVIDIA is prohibited.
- *
- * NOTWITHSTANDING ANY TERMS OR CONDITIONS TO THE CONTRARY IN THE
- * LICENSE AGREEMENT, NVIDIA MAKES NO REPRESENTATION ABOUT THE
- * SUITABILITY OF THESE LICENSED DELIVERABLES FOR ANY PURPOSE.  IT IS
- * PROVIDED "AS IS" WITHOUT EXPRESS OR IMPLIED WARRANTY OF ANY KIND.
- * NVIDIA DISCLAIMS ALL WARRANTIES WITH REGARD TO THESE LICENSED
- * DELIVERABLES, INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY,
- * NONINFRINGEMENT, AND FITNESS FOR A PARTICULAR PURPOSE.
- * NOTWITHSTANDING ANY TERMS OR CONDITIONS TO THE CONTRARY IN THE
- * LICENSE AGREEMENT, IN NO EVENT SHALL NVIDIA BE LIABLE FOR ANY
- * SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL DAMAGES, OR ANY
- * DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
- * WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS
- * ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE
- * OF THESE LICENSED DELIVERABLES.
- *
- * U.S. Government End Users.  These Licensed Deliverables are a
- * "commercial item" as that term is defined at 48 C.F.R. 2.101 (OCT
- * 1995), consisting of "commercial computer software" and "commercial
- * computer software documentation" as such terms are used in 48
- * C.F.R. 12.212 (SEPT 1995) and is provided to the U.S. Government
- * only as a commercial end item.  Consistent with 48 C.F.R.12.212 and
- * 48 C.F.R. 227.7202-1 through 227.7202-4 (JUNE 1995), all
- * U.S. Government End Users acquire the Licensed Deliverables with
- * only those rights set forth herein.
- *
- * Any use of the Licensed Deliverables in individual and commercial
- * software must include, in the user documentation and internal
- * comments to the code, the above Disclaimer and U.S. Government End
- * Users Notice.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 #ifndef TENSORRT_LOGGING_H
 #define TENSORRT_LOGGING_H
 
 #include "NvInferRuntimeCommon.h"
-#include <ctime>
+#include "sampleOptions.h"
 #include <cassert>
-#include <iostream>
+#include <ctime>
 #include <iomanip>
+#include <iostream>
+#include <mutex>
 #include <ostream>
 #include <sstream>
 #include <string>
+
+namespace sample
+{
 
 using Severity = nvinfer1::ILogger::Severity;
 
@@ -71,12 +44,18 @@ public:
     {
     }
 
-    LogStreamConsumerBuffer(LogStreamConsumerBuffer&& other)
+    LogStreamConsumerBuffer(LogStreamConsumerBuffer&& other) noexcept
         : mOutput(other.mOutput)
+        , mPrefix(other.mPrefix)
+        , mShouldLog(other.mShouldLog)
     {
     }
+    LogStreamConsumerBuffer(const LogStreamConsumerBuffer& other) = delete;
+    LogStreamConsumerBuffer() = delete;
+    LogStreamConsumerBuffer& operator=(const LogStreamConsumerBuffer&) = delete;
+    LogStreamConsumerBuffer& operator=(LogStreamConsumerBuffer&&) = delete;
 
-    ~LogStreamConsumerBuffer()
+    ~LogStreamConsumerBuffer() override
     {
         // std::streambuf::pbase() gives a pointer to the beginning of the buffered part of the output sequence
         // std::streambuf::pptr() gives a pointer to the current position of the output sequence
@@ -88,10 +67,12 @@ public:
         }
     }
 
-    // synchronizes the stream buffer and returns 0 on success
-    // synchronizing the stream buffer consists of inserting the buffer contents into the stream,
-    // resetting the buffer and flushing the stream
-    virtual int sync()
+    //!
+    //! synchronizes the stream buffer and returns 0 on success
+    //! synchronizing the stream buffer consists of inserting the buffer contents into the stream,
+    //! resetting the buffer and flushing the stream
+    //!
+    int32_t sync() override
     {
         putOutput();
         return 0;
@@ -100,25 +81,25 @@ public:
     void putOutput()
     {
         if (mShouldLog)
-        {   
+        {
             // prepend timestamp
             std::time_t timestamp = std::time(nullptr);
-            tm *tm_local = std::localtime(&timestamp);
-            std::cout << "[";
-            std::cout << std::setw(2) << std::setfill('0') << tm_local->tm_mon << "/";
-            std::cout << std::setw(2) << std::setfill('0') << tm_local->tm_mday << "/";
-            std::cout << std::setw(4) << std::setfill('0') << 1900 + tm_local->tm_year << "-";
-            std::cout << std::setw(2) << std::setfill('0') << tm_local->tm_hour << ":";
-            std::cout << std::setw(2) << std::setfill('0') << tm_local->tm_min << ":";
-            std::cout << std::setw(2) << std::setfill('0') << tm_local->tm_sec << "] ";
+            tm* tm_local = std::localtime(&timestamp);
+            mOutput << "[";
+            mOutput << std::setw(2) << std::setfill('0') << 1 + tm_local->tm_mon << "/";
+            mOutput << std::setw(2) << std::setfill('0') << tm_local->tm_mday << "/";
+            mOutput << std::setw(4) << std::setfill('0') << 1900 + tm_local->tm_year << "-";
+            mOutput << std::setw(2) << std::setfill('0') << tm_local->tm_hour << ":";
+            mOutput << std::setw(2) << std::setfill('0') << tm_local->tm_min << ":";
+            mOutput << std::setw(2) << std::setfill('0') << tm_local->tm_sec << "] ";
             // std::stringbuf::str() gets the string contents of the buffer
             // insert the buffer contents pre-appended by the appropriate prefix into the stream
             mOutput << mPrefix << str();
-            // set the buffer to empty
-            str("");
-            // flush the stream
-            mOutput.flush();
         }
+        // set the buffer to empty
+        str("");
+        // flush the stream
+        mOutput.flush();
     }
 
     void setShouldLog(bool shouldLog)
@@ -129,8 +110,8 @@ public:
 private:
     std::ostream& mOutput;
     std::string mPrefix;
-    bool mShouldLog;
-};
+    bool mShouldLog{};
+}; // class LogStreamConsumerBuffer
 
 //!
 //! \class LogStreamConsumerBase
@@ -145,8 +126,9 @@ public:
     }
 
 protected:
+    std::mutex mLogMutex;
     LogStreamConsumerBuffer mBuffer;
-};
+}; // class LogStreamConsumerBase
 
 //!
 //! \class LogStreamConsumer
@@ -160,9 +142,11 @@ protected:
 class LogStreamConsumer : protected LogStreamConsumerBase, public std::ostream
 {
 public:
+    //!
     //! \brief Creates a LogStreamConsumer which logs messages with level severity.
     //!  Reportable severity determines if the messages are severe enough to be logged.
-    LogStreamConsumer(Severity reportableSeverity, Severity severity)
+    //!
+    LogStreamConsumer(nvinfer1::ILogger::Severity reportableSeverity, nvinfer1::ILogger::Severity severity)
         : LogStreamConsumerBase(severityOstream(severity), severityPrefix(severity), severity <= reportableSeverity)
         , std::ostream(&mBuffer) // links the stream buffer with the stream
         , mShouldLog(severity <= reportableSeverity)
@@ -170,18 +154,33 @@ public:
     {
     }
 
-    LogStreamConsumer(LogStreamConsumer&& other)
+    LogStreamConsumer(LogStreamConsumer&& other) noexcept
         : LogStreamConsumerBase(severityOstream(other.mSeverity), severityPrefix(other.mSeverity), other.mShouldLog)
         , std::ostream(&mBuffer) // links the stream buffer with the stream
         , mShouldLog(other.mShouldLog)
         , mSeverity(other.mSeverity)
     {
     }
+    LogStreamConsumer(const LogStreamConsumer& other) = delete;
+    LogStreamConsumer() = delete;
+    ~LogStreamConsumer() = default;
+    LogStreamConsumer& operator=(const LogStreamConsumer&) = delete;
+    LogStreamConsumer& operator=(LogStreamConsumer&&) = delete;
 
     void setReportableSeverity(Severity reportableSeverity)
     {
         mShouldLog = mSeverity <= reportableSeverity;
         mBuffer.setShouldLog(mShouldLog);
+    }
+
+    std::mutex& getMutex()
+    {
+        return mLogMutex;
+    }
+
+    bool getShouldLog() const
+    {
+        return mShouldLog;
     }
 
 private:
@@ -205,35 +204,77 @@ private:
 
     bool mShouldLog;
     Severity mSeverity;
-};
+}; // class LogStreamConsumer
 
+template <typename T>
+LogStreamConsumer& operator<<(LogStreamConsumer& logger, const T& obj)
+{
+    if (logger.getShouldLog())
+    {
+        std::lock_guard<std::mutex> guard(logger.getMutex());
+        auto& os = static_cast<std::ostream&>(logger);
+        os << obj;
+    }
+    return logger;
+}
+
+//!
+//! Special handling std::endl
+//!
+inline LogStreamConsumer& operator<<(LogStreamConsumer& logger, std::ostream& (*f)(std::ostream&) )
+{
+    if (logger.getShouldLog())
+    {
+        std::lock_guard<std::mutex> guard(logger.getMutex());
+        auto& os = static_cast<std::ostream&>(logger);
+        os << f;
+    }
+    return logger;
+}
+
+inline LogStreamConsumer& operator<<(LogStreamConsumer& logger, const nvinfer1::Dims& dims)
+{
+    if (logger.getShouldLog())
+    {
+        std::lock_guard<std::mutex> guard(logger.getMutex());
+        auto& os = static_cast<std::ostream&>(logger);
+        for (int32_t i = 0; i < dims.nbDims; ++i)
+        {
+            os << (i ? "x" : "") << dims.d[i];
+        }
+    }
+    return logger;
+}
+
+//!
 //! \class Logger
 //!
 //! \brief Class which manages logging of TensorRT tools and samples
 //!
-//! \details This class provides a common interface for TensorRT tools and samples to log information to the console, and
-//! supports logging two types of messages:
+//! \details This class provides a common interface for TensorRT tools and samples to log information to the console,
+//! and supports logging two types of messages:
 //!
 //! - Debugging messages with an associated severity (info, warning, error, or internal error/fatal)
 //! - Test pass/fail messages
 //!
-//! The advantage of having all samples use this class for logging as opposed to emitting directly to stdout/stderr is that
-//! the logic for controlling the verbosity and formatting of sample output is centralized in one location.
+//! The advantage of having all samples use this class for logging as opposed to emitting directly to stdout/stderr is
+//! that the logic for controlling the verbosity and formatting of sample output is centralized in one location.
 //!
 //! In the future, this class could be extended to support dumping test results to a file in some standard format
 //! (for example, JUnit XML), and providing additional metadata (e.g. timing the duration of a test run).
 //!
-//! TODO: For backwards compatibility with existing samples, this class inherits directly from the nvinfer1::ILogger interface,
-//! which is problematic since there isn't a clean separation between messages coming from the TensorRT library and messages coming
-//! from the sample.
+//! TODO: For backwards compatibility with existing samples, this class inherits directly from the nvinfer1::ILogger
+//! interface, which is problematic since there isn't a clean separation between messages coming from the TensorRT
+//! library and messages coming from the sample.
 //!
-//! In the future (once all samples are updated to use Logger::getTRTLogger() to access the ILogger) we can refactor the class
-//! to eliminate the inheritance and instead make the nvinfer1::ILogger implementation a member of the Logger object.
-
+//! In the future (once all samples are updated to use Logger::getTRTLogger() to access the ILogger) we can refactor the
+//! class to eliminate the inheritance and instead make the nvinfer1::ILogger implementation a member of the Logger
+//! object.
+//!
 class Logger : public nvinfer1::ILogger
 {
 public:
-    Logger(Severity severity = Severity::kWARNING)
+    explicit Logger(Severity severity = Severity::kWARNING)
         : mReportableSeverity(severity)
     {
     }
@@ -257,7 +298,7 @@ public:
     //! TODO Once all samples are updated to use this method to register the logger with TensorRT,
     //! we can eliminate the inheritance of Logger from ILogger
     //!
-    nvinfer1::ILogger& getTRTLogger()
+    nvinfer1::ILogger& getTRTLogger() noexcept
     {
         return *this;
     }
@@ -265,10 +306,10 @@ public:
     //!
     //! \brief Implementation of the nvinfer1::ILogger::log() virtual method
     //!
-    //! Note samples should not be calling this function directly; it will eventually go away once we eliminate the inheritance from
-    //! nvinfer1::ILogger
+    //! Note samples should not be calling this function directly; it will eventually go away once we eliminate the
+    //! inheritance from nvinfer1::ILogger
     //!
-    void log(Severity severity, const char* msg) override
+    void log(Severity severity, const char* msg) noexcept override
     {
         LogStreamConsumer(mReportableSeverity, severity) << "[TRT] " << std::string(msg) << std::endl;
     }
@@ -278,7 +319,7 @@ public:
     //!
     //! \param severity The logger will only emit messages that have severity of this level or higher.
     //!
-    void setReportableSeverity(Severity severity)
+    void setReportableSeverity(Severity severity) noexcept
     {
         mReportableSeverity = severity;
     }
@@ -335,10 +376,13 @@ public:
     //! \param[in] argv The array of command-line arguments (given as C strings)
     //!
     //! \return a TestAtom that can be used in Logger::reportTest{Start,End}().
-    static TestAtom defineTest(const std::string& name, int argc, char const* const* argv)
+    //!
+    static TestAtom defineTest(const std::string& name, int32_t argc, char const* const* argv)
     {
+        // Append TensorRT version as info
+        const std::string vname = name + " [TensorRT v" + std::to_string(NV_TENSORRT_VERSION) + "]";
         auto cmdline = genCmdlineString(argc, argv);
-        return defineTest(name, cmdline);
+        return defineTest(vname, cmdline);
     }
 
     //!
@@ -364,32 +408,32 @@ public:
     //! \param[in] result The result of the test. Should be one of TestResult::kPASSED,
     //!                   TestResult::kFAILED, TestResult::kWAIVED
     //!
-    static void reportTestEnd(const TestAtom& testAtom, TestResult result)
+    static void reportTestEnd(TestAtom const& testAtom, TestResult result)
     {
         assert(result != TestResult::kRUNNING);
         assert(testAtom.mStarted);
         reportTestResult(testAtom, result);
     }
 
-    static int reportPass(const TestAtom& testAtom)
+    static int32_t reportPass(TestAtom const& testAtom)
     {
         reportTestEnd(testAtom, TestResult::kPASSED);
         return EXIT_SUCCESS;
     }
 
-    static int reportFail(const TestAtom& testAtom)
+    static int32_t reportFail(TestAtom const& testAtom)
     {
         reportTestEnd(testAtom, TestResult::kFAILED);
         return EXIT_FAILURE;
     }
 
-    static int reportWaive(const TestAtom& testAtom)
+    static int32_t reportWaive(TestAtom const& testAtom)
     {
         reportTestEnd(testAtom, TestResult::kWAIVED);
         return EXIT_SUCCESS;
     }
 
-    static int reportTest(const TestAtom& testAtom, bool pass)
+    static int32_t reportTest(TestAtom const& testAtom, bool pass)
     {
         return pass ? reportPass(testAtom) : reportFail(testAtom);
     }
@@ -442,34 +486,34 @@ private:
     //!
     //! \brief method that implements logging test results
     //!
-    static void reportTestResult(const TestAtom& testAtom, TestResult result)
+    static void reportTestResult(TestAtom const& testAtom, TestResult result)
     {
-        severityOstream(Severity::kINFO) << "&&&& " << testResultString(result)
-                                         << " " << testAtom.mName << " # " << testAtom.mCmdline
-                                         << std::endl;
+        severityOstream(Severity::kINFO) << "&&&& " << testResultString(result) << " " << testAtom.mName << " # "
+                                         << testAtom.mCmdline << std::endl;
     }
 
     //!
     //! \brief generate a command line string from the given (argc, argv) values
     //!
-    static std::string genCmdlineString(int argc, char const* const* argv)
+    static std::string genCmdlineString(int32_t argc, char const* const* argv)
     {
         std::stringstream ss;
-        for (int i = 0; i < argc; i++)
+        for (int32_t i = 0; i < argc; i++)
         {
             if (i > 0)
+            {
                 ss << " ";
+            }
             ss << argv[i];
         }
         return ss.str();
     }
 
     Severity mReportableSeverity;
-};
+}; // class Logger
 
 namespace
 {
-
 //!
 //! \brief produces a LogStreamConsumer object that can be used to log messages of severity kVERBOSE
 //!
@@ -520,7 +564,7 @@ inline LogStreamConsumer LOG_ERROR(const Logger& logger)
 
 //!
 //! \brief produces a LogStreamConsumer object that can be used to log messages of severity kINTERNAL_ERROR
-//         ("fatal" severity)
+//!        ("fatal" severity)
 //!
 //! Example usage:
 //!
@@ -530,7 +574,6 @@ inline LogStreamConsumer LOG_FATAL(const Logger& logger)
 {
     return LogStreamConsumer(logger.getReportableSeverity(), Severity::kINTERNAL_ERROR);
 }
-
 } // anonymous namespace
-
+} // namespace sample
 #endif // TENSORRT_LOGGING_H

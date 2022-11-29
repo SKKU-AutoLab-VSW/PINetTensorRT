@@ -1,35 +1,35 @@
-## key points estimation and point instance segmentation approach for lane detection
+## Key Points Estimation and Point Instance Segmentation Approach for Lane Detection
 
-- Paper : key points estimation and point instance segmentation approach for lane detection
+- Paper : Key Points Estimation and Point Instance Segmentation Approach for Lane Detection
 - Paper Link : https://arxiv.org/abs/2002.06604
 - Author : Yeongmin Ko, Jiwon Jun, Donghwuy Ko, Moongu Jeon (Gwanju Institute of Science and Technology)
 
 
-- This repository is TensorRT implement of [PINet](https://github.com/koyeongmin/PINet)
+- This repository is an TensorRT implementation of [old version of PINet](https://github.com/koyeongmin/PINet)
 
 
 ## Dependency
 
-- TensorRT 6.0
+- TensorRT 8.4.1
 - OpenCV
 
 ## Convert
 
-- clone [PINet](https://github.com/koyeongmin/PINet) source code
+- Clone [PINet](https://github.com/koyeongmin/PINet) source code
 ```python
     git clone https://github.com/koyeongmin/PINet.git
 ```
 
-you can convert Pytorch weights file to onnx file, follow as:
+You can convert Pytorch weights file to onnx file as follows:
 
-- insert this code at end of agent.py :
+- Insert this code at end of agent.py:
   
 ```python
     def export_onnx(self, input_image, filename):
         torch_out = torch.onnx.export(self.lane_detection_network, input_image, filename, verbose=True)
 ```
 
-- run this code to convert weights file to onnx, please use pytorch 1.0.1
+- Run this code to convert weights file to onnx with latest Pytorch
 
 ```python
     import torch
@@ -46,13 +46,13 @@ you can convert Pytorch weights file to onnx file, follow as:
 ```
 
 ## Run
-- run this program with image directory
+- Run this program with image directory
 
 ```shell
     ./PINetTensorrt --datadir=<path of your test images> 
 ```
 
-- or run this program with default images
+- Or run this program with default images
   
 ```shell
     ./PINetTensorrt
@@ -61,64 +61,41 @@ you can convert Pytorch weights file to onnx file, follow as:
 ## Test
 
 ### Object
-- Pytorch implement of PINet
-- Tensorrt C++ implement of PINet
+- Pytorch Implementation of PINet
+- TensorRT C++ Implementation of PINet
 
 
 ### Purpose
 
-- Tensorrt performance under X86 architecture
-- Tensorrt performance under Xavier
+- TensorRT performance under X86 architecture
+- TensorRT performance under Nvidia AGX Xavier system
 
 
 ### Dataset
 
-data source：tusimple dataset 0531 directory
-
-image format：jpg
-
-image size：1280 x 720
-
-image channels：RGB
-
-count of images：14300
-
-disk space size： 3GB
+- Data source：tusimple dataset 0531 directory
+- Image format：jpg
+- Image size：1280 x 720
+- Image channels：RGB
+- Number of images：14300
 
 
 ---
 ### X86 Computer
 
-OS：ubuntu 18.04
-
-CPU：AMD Ryzen 7 3700X 8-Core Processor
-
-CPU Frequency: 3600 mhz
-
-ram：32GB  3200mhz
-
-video card：Nvidia Titan
-
-vram： 6G
-
-disk：Seagate cool fish 7200rpm
-
-
+- OS：Ubuntu 18.04
+- CPU：AMD Ryzen 7 3700X 8-Core Processor @3600 mhz
+- RAM：32GB @3200mhz
+- GPU：Nvidia GeForce GTX TITAN (Kepler) 6GB
 
 ### Xavier
-
-OS：ubuntu 18.04
-
-CPU：ARMv8 Processor rev 0 (v8l)
-
-CPU Frequency: 2036 mhz
-
-ram：16GB
-
+- OS：Ubuntu 18.04
+- CPU：ARMv8 Processor rev 0 (v8l) @2036 mhz
+- RAM：16GB
 
 ### Test
 
-##### Explain
+#### Explain
 
 - end to end：elapsed time of read image， inference，post processing，draw lane line result to image
 - execute： elapsed time of copy host ram to device vram，inference exectute， copy device vram to host ram
@@ -131,7 +108,7 @@ execute    = totally execute    / count of image in dataset
 ```
 
 
-##### X86 && Pytorch Implement
+#### X86 & Pytorch Implementation
 
 | NO. | totally end to end | end to end(ms) | totally execute(s) | execute(ms) |
 | ---- | ------------------ | ---------------- | ------------------- | ------------- |
@@ -144,7 +121,7 @@ execute    = totally execute    / count of image in dataset
 
 
 
-##### X86 && Tensorrt C++ Implement
+#### X86 & Tensorrt C++ Implement
 
 | NO. | totally end to end(s) | end to end(ms) | totally execute(s) | execute(ms) |
 | ---- | ---------------------- | ---------------- | ------------------- | ------------- |
@@ -156,7 +133,7 @@ execute    = totally execute    / count of image in dataset
 | average | 341.45                 | 23.88            | 153.966             | 10.77         |
 
 
-##### Xavier && Tensorrt C++ Implement
+#### Xavier & Tensorrt C++ Implement
 
 | NO. | totally end to end(s) | end to end(ms) | totally execute(s) | execute(ms) |
 | ---- | ---------------------- | ---------------- | ------------------- | ------------- |
@@ -168,7 +145,7 @@ execute    = totally execute    / count of image in dataset
 | average | 664.254                | 46.45            | 288.51              | 20.175        |
 
 
-##### Result
-- elapsed time of inference execute under x86 architecture, Tensorrt C++ implement faster 1.5 times than Pytorch implement
-- elapsed time of end to end under x86 architecture, Tensorrt C++ implement faster 10 times than Pytorch implement
-- elapsed time of inference execute under Xavier, x86 architecture faster 2 times，takes 20 ms on average 
+#### Result
+- Elapsed time of inference executed under x86 architecture, TensorRT C++ implementation is 1.5 times faster than Pytorch implementation.
+- Elapsed time of end to end under x86 architecture, TensorRT C++ implementation is 10 times faster than Pytorch implementation
+- Elapsed time of inference executed under Xavier, x86 architecture is 2 times faster，takes 20 ms on average.

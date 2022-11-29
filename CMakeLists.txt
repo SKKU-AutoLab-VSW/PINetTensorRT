@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.10)
 project(PINetTensorrt)
 
 # add_compile_options("-g")
-add_compile_options("-o2")
+add_compile_options("-O2")
 
 find_package(OpenCV REQUIRED)
 
@@ -18,6 +18,7 @@ aux_source_directory(. SRCS)
 aux_source_directory(common COMMON_SRCS)
 
 link_directories(${CUDA_LIB_DIR} ${TEGRA_LIB_DIR})
+link_directories("/usr/local/TensorRT/lib")
 add_executable(${PROJECT_NAME} ${COMMON_SRCS} ${SRCS})
 
 set(CUDA_LIB cuda cudnn cublas cudart culibos)

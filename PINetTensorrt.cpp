@@ -22,6 +22,9 @@
 #include <opencv2/core/core.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
 
+using namespace nvinfer1;
+using samplesCommon::SampleUniquePtr;
+
 namespace {
     const std::string gSampleName = "TensorRT.onnx_PINet";
 
@@ -60,7 +63,7 @@ namespace {
         struct dirent *ptr;
 
         if ((dir = opendir(root_dir.c_str())) == NULL) {
-            gLogInfo << "Open dir error..." << std::endl;
+            sample::gLogInfo << "Open dir error..." << std::endl;
             return;
         }
     
@@ -93,11 +96,8 @@ namespace {
 //!
 class PINetTensorrt
 {
-    template <typename T>
-    using UniquePtr = std::unique_ptr<T, common::InferDeleter>;
-
 public:
-    PINetTensorrt(const common::OnnxParams& params)
+    PINetTensorrt(const samplesCommon::OnnxSampleParams& params)
         : mParams(params)
         , mEngine(nullptr)
     {
@@ -118,7 +118,7 @@ public:
     }
 
 private:
-    common::OnnxParams mParams; //!< The parameters for the sample.
+    samplesCommon::OnnxSampleParams mParams; //!< The parameters for the sample.
 
     nvinfer1::Dims mInputDims;  //!< The dimensions of the input to the network.
     std::vector<nvinfer1::Dims> mOutputDims; //!< The dimensions of the output to the network.
@@ -130,18 +130,18 @@ private:
     //!
     //! \brief Parses an ONNX model for MNIST and creates a TensorRT network
     //!
-    bool constructNetwork(UniquePtr<nvinfer1::IBuilder>& builder,
-        UniquePtr<nvinfer1::INetworkDefinition>& network, UniquePtr<nvinfer1::IBuilderConfig>& config,
-        UniquePtr<nvonnxparser::IParser>& parser);
+    bool constructNetwork(SampleUniquePtr<nvinfer1::IBuilder>& builder,
+        SampleUniquePtr<nvinfer1::INetworkDefinition>& network, SampleUniquePtr<nvinfer1::IBuilderConfig>& config,
+        SampleUniquePtr<nvonnxparser::IParser>& parser);
 
     //!
     //! \brief Reads the input  and stores the result in a managed buffer
     //!
-    bool processInput(const common::BufferManager& buffers);
+    bool processInput(const samplesCommon::BufferManager& buffers);
     //!
     //! \brief Classifies digits and verify result
     //!
-    bool verifyOutput(const common::BufferManager& buffers);
+    bool verifyOutput(const samplesCommon::BufferManager& buffers);
 
     void generatePostData(float* confidance_data, float* offsets_data, float* instance_data, cv::Mat& mask, cv::Mat& offsets, cv::Mat& features);
 
@@ -154,29 +154,30 @@ private:
 //! \details This function creates the Onnx MNIST network by parsing the Onnx model and builds
 //!          the engine that will be used to run MNIST (mEngine)
 //!
-//! \return Returns true if the engine was created successfully and false otherwise
+//! \return true if the engine was created successfully and false otherwise
 //!
 bool PINetTensorrt::build()
 {
-    auto builder = UniquePtr<nvinfer1::IBuilder>(nvinfer1::createInferBuilder(gLogger.getTRTLogger()));
+    auto builder = SampleUniquePtr<nvinfer1::IBuilder>(nvinfer1::createInferBuilder(sample::gLogger.getTRTLogger()));
     if (!builder)
     {
         return false;
     }
 
-    auto network = UniquePtr<nvinfer1::INetworkDefinition>(builder->createNetwork());
+    const auto explicitBatch = 1U << static_cast<uint32_t>(nvinfer1::NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);
+    auto network = SampleUniquePtr<nvinfer1::INetworkDefinition>(builder->createNetworkV2(explicitBatch));
     if (!network)
     {
         return false;
     }
 
-    auto config = UniquePtr<nvinfer1::IBuilderConfig>(builder->createBuilderConfig());
+    auto config = SampleUniquePtr<nvinfer1::IBuilderConfig>(builder->createBuilderConfig());
     if (!config)
     {
         return false;
     }
 
-    auto parser = UniquePtr<nvonnxparser::IParser>(nvonnxparser::createParser(*network, gLogger.getTRTLogger()));
+    auto parser = SampleUniquePtr<nvonnxparser::IParser>(nvonnxparser::createParser(*network, sample::gLogger.getTRTLogger()));
     if (!parser)
     {
         return false;
@@ -188,33 +189,54 @@ bool PINetTensorrt::build()
         return false;
     }
 
-    mEngine = std::shared_ptr<nvinfer1::ICudaEngine>(builder->buildEngineWithConfig(*network, *config), common::InferDeleter());
-    if (!mEngine)
+    // CUDA stream used for profiling by the builder.
+    auto profileStream = samplesCommon::makeCudaStream();
+    if (!profileStream)
+    {
+        return false;
+    }
+    config->setProfileStream(*profileStream);
+
+    SampleUniquePtr<IHostMemory> plan{builder->buildSerializedNetwork(*network, *config)};
+    if (!plan)
     {
         return false;
     }
 
-    if (gLogger.getReportableSeverity() == Logger::Severity::kVERBOSE) {
+    SampleUniquePtr<IRuntime> runtime{createInferRuntime(sample::gLogger.getTRTLogger())};
+    if (!runtime)
+    {
+        return false;
+    }   
+
+    mEngine = std::shared_ptr<nvinfer1::ICudaEngine>(
+        runtime->deserializeCudaEngine(plan->data(), plan->size()), samplesCommon::InferDeleter());
+    if (!mEngine)
+    {
+       return false;
+    }
+
+    if (sample::gLogger.getReportableSeverity() == sample::Logger::Severity::kVERBOSE) {
         for (int i = 0; i < network->getNbInputs(); ++i) {
             nvinfer1::Dims dim = network->getInput(i)->getDimensions();
-            gLogInfo << "InputDims: " << i << " " << dim.d[0] << " " << dim.d[1] << " " << dim.d[2] << std::endl;
+            sample::gLogInfo << "InputDims: " << i << " " << dim.d[1] << " " << dim.d[2] << " " << dim.d[3] << std::endl;
         }
 
         for (int i = 0; i < network->getNbOutputs(); ++i) {
             nvinfer1::Dims dim = network->getOutput(i)->getDimensions();
-            gLogInfo << "OutputDims: " << i << " " << dim.d[0] << " " << dim.d[1] << " " << dim.d[2] << std::endl;
+            sample::gLogInfo << "OutputDims: " << i << " " << dim.d[1] << " " << dim.d[2] << " " << dim.d[3] << std::endl;
         }
     }
 
-    assert(network->getNbInputs() == 1);
+    ASSERT(network->getNbInputs() == 1);
     mInputDims = network->getInput(0)->getDimensions();
-    assert(mInputDims.nbDims == 3);
+    ASSERT(mInputDims.nbDims == 4);
 
-    assert(network->getNbOutputs() == 6);
+    ASSERT(network->getNbOutputs() == 6);
     for (int i = 0; i < network->getNbOutputs(); ++i) {
         nvinfer1::Dims dim = network->getOutput(i)->getDimensions();
         mOutputDims.push_back(dim);
-        assert(dim.nbDims == 3);
+        ASSERT(dim.nbDims == 4);
     }
 
     return true;
@@ -228,18 +250,16 @@ bool PINetTensorrt::build()
 //!
 //! \param builder Pointer to the engine builder
 //!
-bool PINetTensorrt::constructNetwork(UniquePtr<nvinfer1::IBuilder>& builder,
-    UniquePtr<nvinfer1::INetworkDefinition>& network, UniquePtr<nvinfer1::IBuilderConfig>& config,
-    UniquePtr<nvonnxparser::IParser>& parser)
+bool PINetTensorrt::constructNetwork(SampleUniquePtr<nvinfer1::IBuilder>& builder,
+    SampleUniquePtr<nvinfer1::INetworkDefinition>& network, SampleUniquePtr<nvinfer1::IBuilderConfig>& config,
+    SampleUniquePtr<nvonnxparser::IParser>& parser)
 {
-    auto parsed = parser->parseFromFile(mParams.onnxFileName.c_str(), static_cast<int>(gLogger.getReportableSeverity()));
+    auto parsed = parser->parseFromFile(mParams.onnxFileName.c_str(), static_cast<int>(sample::gLogger.getReportableSeverity()));
     if (!parsed)
     {
         return false;
     }
 
-    builder->setMaxBatchSize(mParams.batchSize);
-    config->setMaxWorkspaceSize(1 << 30);
     if (mParams.fp16)
     {
         config->setFlag(BuilderFlag::kFP16);
@@ -247,10 +267,10 @@ bool PINetTensorrt::constructNetwork(UniquePtr<nvinfer1::IBuilder>& builder,
     if (mParams.int8)
     {
         config->setFlag(BuilderFlag::kINT8);
-        common::setAllTensorScales(network.get(), 127.0f, 127.0f);
+        samplesCommon::setAllDynamicRanges(network.get(), 127.0f, 127.0f);
     }
 
-    common::enableDLA(builder.get(), config.get(), mParams.dlaCore);
+    samplesCommon::enableDLA(builder.get(), config.get(), mParams.dlaCore);
 
     return true;
 }
@@ -264,16 +284,16 @@ bool PINetTensorrt::constructNetwork(UniquePtr<nvinfer1::IBuilder>& builder,
 bool PINetTensorrt::infer()
 {
     // Create RAII buffer manager object
-    common::BufferManager buffers(mEngine, mParams.batchSize);
+    samplesCommon::BufferManager buffers(mEngine);
 
-    auto context = UniquePtr<nvinfer1::IExecutionContext>(mEngine->createExecutionContext());
+    auto context = SampleUniquePtr<nvinfer1::IExecutionContext>(mEngine->createExecutionContext());
     if (!context)
     {
         return false;
     }
 
     // Read the input data into the managed buffers
-    assert(mParams.inputTensorNames.size() == 1);
+    ASSERT(mParams.inputTensorNames.size() == 1);
     if (!processInput(buffers))
     {
         return false;
@@ -283,7 +303,7 @@ bool PINetTensorrt::infer()
     // Memcpy from host input buffers to device input buffers
     buffers.copyInputToDevice();
 
-    bool status = context->execute(mParams.batchSize, buffers.getDeviceBindings().data());
+    bool status = context->executeV2(buffers.getDeviceBindings().data());
     if (!status)
     {
         return false;
@@ -296,7 +316,7 @@ bool PINetTensorrt::infer()
     total_inference_execute_elasped_time += inference_execute_elapsed_time.count();
     ++total_inference_execute_times;
 
-    //gLogInfo << "inference elapsed time: " << inferenceElapsedTime.count() / 1000.f << " milliseconds" << std::endl;
+    //sample::gLogInfo << "inference elapsed time: " << inference_execute_elapsed_time.count() / 1000.f << " milliseconds" << std::endl;
 
     // Verify results
     if (!verifyOutput(buffers))
@@ -310,22 +330,22 @@ bool PINetTensorrt::infer()
 //!
 //! \brief Reads the input and stores the result in a managed buffer
 //!
-bool PINetTensorrt::processInput(const common::BufferManager& buffers)
+bool PINetTensorrt::processInput(const samplesCommon::BufferManager& buffers)
 {
-    const int inputC = mInputDims.d[0];
-    const int inputW = mInputDims.d[1];
+    const int inputC = mInputDims.d[1];
     const int inputH = mInputDims.d[2];
+    const int inputW = mInputDims.d[3];
 
     cv::Mat image = cv::imread(mImageFileName, 1);
     assert(inputC == image.channels());
-    cv::resize(image, image, cv::Size(inputH, inputW));
+    cv::resize(image, image, cv::Size(inputW, inputH));
 
     mInputImage = image;
 
     float* hostDataBuffer = static_cast<float*>(buffers.getHostBuffer(mParams.inputTensorNames[0]));
     uchar* imageData = image.ptr<uchar>();
     for (int c = 0; c < inputC; ++c) {
-        for (unsigned j = 0, volChl = inputH * inputW; j < volChl; ++j) {
+        for (unsigned j = 0, volChl = inputW * inputH; j < volChl; ++j) {
             hostDataBuffer[c * volChl + j] = float(imageData[j * inputC + c]) / 255.f;
         }
     }
@@ -335,33 +355,33 @@ bool PINetTensorrt::processInput(const common::BufferManager& buffers)
 
 void PINetTensorrt::generatePostData(float* confidance_data, float* offsets_data, float* instance_data, cv::Mat& mask, cv::Mat& offsets, cv::Mat& features)
 {
-    const nvinfer1::Dims& dim            = mOutputDims[output_base_index];//1 32 64
+    const nvinfer1::Dims& dim            = mOutputDims[output_base_index + 0];//1 32 64
     const nvinfer1::Dims& offset_dim     = mOutputDims[output_base_index + 1];//2 32 64
     const nvinfer1::Dims& instance_dim   = mOutputDims[output_base_index + 2];//4 32 64
 
-    mask = cv::Mat::zeros(dim.d[1], dim.d[2], CV_8UC1);
+    mask = cv::Mat::zeros(dim.d[2], dim.d[3], CV_8UC1);
     float* confidance_ptr = confidance_data;
-    for (int i = 0; i < dim.d[1]; ++i) {
-        for (int j = 0; j < dim.d[2]; ++j, ++confidance_ptr) {
+    for (int i = 0; i < dim.d[2]; ++i) {
+        for (int j = 0; j < dim.d[3]; ++j, ++confidance_ptr) {
             if (*confidance_ptr > threshold_point) {
                 mask.at<uchar>(i, j) = 1;
             }
         }
     }
 
-    if (gLogger.getReportableSeverity() == Logger::Severity::kVERBOSE) {
-        gLogInfo << "Output mask:" << std::endl;
-        for (int i = 0; i < dim.d[1]; ++i) {
-            for (int j = 0; j < dim.d[2]; ++j) {
-                gLogInfo << (int)mask.at<uchar>(i, j);
+    if (sample::gLogger.getReportableSeverity() == sample::Logger::Severity::kVERBOSE) {
+        sample::gLogInfo << "Output mask:" << std::endl;
+        for (int i = 0; i < dim.d[2]; ++i) {
+            for (int j = 0; j < dim.d[3]; ++j) {
+                sample::gLogInfo << (int)mask.at<uchar>(i, j);
             }
-            gLogInfo << std::endl;
+            sample::gLogInfo << std::endl;
         }
 
         cv::Mat maskImage = mInputImage.clone();
         cv::Scalar color(0, 0, 255);
-        for (int i = 0; i < dim.d[1]; ++i) {
-            for (int j = 0; j < dim.d[2]; ++j) {
+        for (int i = 0; i < dim.d[2]; ++i) {
+            for (int j = 0; j < dim.d[3]; ++j) {
                 if ((int)mask.at<uchar>(i, j)) {
                     cv::circle(maskImage, cv::Point2f(j * 8, i * 8), 3, color, -1);
                 }
@@ -371,22 +391,22 @@ void PINetTensorrt::generatePostData(float* confidance_data, float* offsets_data
         cv::waitKey(0);
     }
 
-    offsets  = chwDataToMat(offset_dim.d[0], offset_dim.d[1], offset_dim.d[2], offsets_data, mask);
-    features = chwDataToMat(instance_dim.d[0], instance_dim.d[1], instance_dim.d[2], instance_data, mask);    
+    offsets  = chwDataToMat(offset_dim.d[1], offset_dim.d[2], offset_dim.d[3], offsets_data, mask);
+    features = chwDataToMat(instance_dim.d[1], instance_dim.d[2], instance_dim.d[3], instance_data, mask);    
 
-    if (gLogger.getReportableSeverity() == Logger::Severity::kVERBOSE) {
-        gLogInfo << "Output offset:" << std::endl;
-        for (int i = 0; i < dim.d[1]; ++i) {
-            for (int j = 0; j < dim.d[2]; ++j) {
-                gLogInfo << (offsets.at<cv::Vec2f>(i, j)[0] ? 1 : 0);
+    if (sample::gLogger.getReportableSeverity() == sample::Logger::Severity::kVERBOSE) {
+        sample::gLogInfo << "Output offset:" << std::endl;
+        for (int i = 0; i < dim.d[2]; ++i) {
+            for (int j = 0; j < dim.d[3]; ++j) {
+                sample::gLogInfo << (offsets.at<cv::Vec2f>(i, j)[0] ? 1 : 0);
             }
-            gLogInfo << std::endl;
+            sample::gLogInfo << std::endl;
         }
 
         cv::Mat offsetImage = mInputImage.clone();
         cv::Scalar color(0, 0, 255);
-        for (int i = 0; i < dim.d[1]; ++i) {
-            for (int j = 0; j < dim.d[2]; ++j) {
+        for (int i = 0; i < dim.d[2]; ++i) {
+            for (int j = 0; j < dim.d[3]; ++j) {
                 if ((int)mask.at<uchar>(i, j)) {
                     cv::Vec2f pointOffset = offsets.at<cv::Vec2f>(i, j);
                     cv::Point2f point(pointOffset[1] + j, pointOffset[0] + i);
@@ -397,12 +417,12 @@ void PINetTensorrt::generatePostData(float* confidance_data, float* offsets_data
         cv::imshow("offset", offsetImage);
         cv::waitKey(0);
 
-        gLogInfo << "Output instance:" << std::endl;
-        for (int i = 0; i < dim.d[1]; ++i) {
-            for (int j = 0; j < dim.d[2]; ++j) {
-                gLogInfo << (features.at<cv::Vec4f>(i, j)[0] ? 1 : 0);
+        sample::gLogInfo << "Output instance:" << std::endl;
+        for (int i = 0; i < dim.d[2]; ++i) {
+            for (int j = 0; j < dim.d[3]; ++j) {
+                sample::gLogInfo << (features.at<cv::Vec4f>(i, j)[0] ? 1 : 0);
             }
-            gLogInfo << std::endl;
+            sample::gLogInfo << std::endl;
         }
     }
 }
@@ -427,16 +447,16 @@ LaneLines PINetTensorrt::generateLaneLine(float* confidance_data, float* offsets
         return -1;
     };
 
-    for (int i = 0; i < dim.d[1]; ++i) {
-        for (int j = 0; j < dim.d[2]; ++j) {
+    for (int i = 0; i < dim.d[2]; ++i) {
+        for (int j = 0; j < dim.d[3]; ++j) {
             if ((int)mask.at<uchar>(i, j) == 0) {
                 continue;
             }
 
             const cv::Vec2f& offset = offsets.at<cv::Vec2f>(i, j);
             cv::Point2f point(offset[1] + j, offset[0] + i);
-            if (point.x > dim.d[2] || point.x < 0.f) continue;
-            if (point.y > dim.d[1] || point.y < 0.f) continue;
+            if (point.x > dim.d[3] || point.x < 0.f) continue;
+            if (point.y > dim.d[2] || point.y < 0.f) continue;
 
             const cv::Vec4f& feature = features.at<cv::Vec4f>(i, j);
             int lane_index = findNearestFeature(feature);
@@ -473,7 +493,7 @@ LaneLines PINetTensorrt::generateLaneLine(float* confidance_data, float* offsets
 //!
 //! \return whether output matches expectations
 //!
-bool PINetTensorrt::verifyOutput(const common::BufferManager& buffers)
+bool PINetTensorrt::verifyOutput(const samplesCommon::BufferManager& buffers)
 {
     float *confidance, *offset, *instance;
     confidance = static_cast<float*>(buffers.getHostBuffer(mParams.outputTensorNames[output_base_index + 0]));    
@@ -484,9 +504,9 @@ bool PINetTensorrt::verifyOutput(const common::BufferManager& buffers)
     nvinfer1::Dims offsetDims     = mOutputDims[output_base_index + 1];
     nvinfer1::Dims instanceDims   = mOutputDims[output_base_index + 2];
     
-    assert(confidanceDims.d[0] == 1);
-    assert(offsetDims.d[0]     == 2);
-    assert(instanceDims.d[0]   == 4);
+    assert(confidanceDims.d[1] == 1);
+    assert(offsetDims.d[1]     == 2);
+    assert(instanceDims.d[1]   == 4);
 
     LaneLines lanelines = generateLaneLine(confidance, offset, instance);
     if (lanelines.empty())
@@ -505,7 +525,7 @@ bool PINetTensorrt::verifyOutput(const common::BufferManager& buffers)
         }
     }
 
-    if (gLogger.getReportableSeverity() == Logger::Severity::kINFO) {
+    if (sample::gLogger.getReportableSeverity() == sample::Logger::Severity::kINFO) {
         cv::imwrite("lanelines.jpg", lanelineImage);
 
         cv::imshow("lanelines", lanelineImage);
@@ -517,12 +537,15 @@ bool PINetTensorrt::verifyOutput(const common::BufferManager& buffers)
 //!
 //! \brief Initializes members of the params struct using the command line args
 //!
-common::OnnxParams initializeSampleParams(const common::Args& args)
+samplesCommon::OnnxSampleParams initializeSampleParams(const samplesCommon::Args& args)
 {
-    common::OnnxParams params;
-    if (args.dataDirs.empty()) {//!< Use default directories if user hasn't provided directory paths
+    samplesCommon::OnnxSampleParams params;
+    if (args.dataDirs.empty()) // Use default directories if user hasn't provided directory paths
+    {
         params.dataDirs.push_back("./data/1492638000682869180");
-    } else {//!< Use the data directory provided by the user
+    } 
+    else // Use the data directory provided by the user
+    {
         params.dataDirs = args.dataDirs;
     }
 
@@ -530,12 +553,13 @@ common::OnnxParams initializeSampleParams(const common::Args& args)
     getcwd(pwd, sizeof(pwd));
 
     params.onnxFileName = "pinet.onnx";
-    params.inputTensorNames.push_back("0");
-    params.batchSize = 1;
-    params.outputTensorNames.push_back("1431");
+    params.inputTensorNames.push_back("input.1");
+    //params.outputTensorNames.push_back("1431");
+    params.outputTensorNames.push_back("input.672");
     params.outputTensorNames.push_back("1438");
     params.outputTensorNames.push_back("1445");
-    params.outputTensorNames.push_back("1679");
+    //params.outputTensorNames.push_back("1679");
+    params.outputTensorNames.push_back("input.1332");
     params.outputTensorNames.push_back("1686");
     params.outputTensorNames.push_back("1693");
     params.dlaCore = args.useDLACore;
@@ -560,11 +584,11 @@ void printHelpInfo()
 
 int main(int argc, char** argv)
 {
-    common::Args args;
-    bool argsOK = common::parseArgs(args, argc, argv);
+    samplesCommon::Args args;
+    bool argsOK = samplesCommon::parseArgs(args, argc, argv);
     if (!argsOK)
     {
-        gLogError << "Invalid arguments" << std::endl;
+        sample::gLogError << "Invalid arguments" << std::endl;
         printHelpInfo();
         return EXIT_FAILURE;
     }
@@ -574,19 +598,19 @@ int main(int argc, char** argv)
         return EXIT_SUCCESS;
     }
 
-    setReportableSeverity(Logger::Severity::kINFO);
-    auto test = gLogger.defineTest(gSampleName, argc, argv);
+    sample::setReportableSeverity(sample::Logger::Severity::kINFO);
+    auto test = sample::gLogger.defineTest(gSampleName, argc, argv);
 
-    gLogger.reportTestStart(test);
+    sample::gLogger.reportTestStart(test);
 
-    common::OnnxParams onnx_args = initializeSampleParams(args);
+    samplesCommon::OnnxSampleParams onnx_args = initializeSampleParams(args);
     PINetTensorrt sample(onnx_args);
 
-    gLogInfo << "Building and running a GPU inference engine for Onnx PINet" << std::endl;
+    sample::gLogInfo << "Building and running a GPU inference engine for Onnx PINet" << std::endl;
 
     if (!sample.build())
     {
-        return gLogger.reportFail(test);
+        return sample::gLogger.reportFail(test);
     }
 
     std::vector<std::string> filenames;
@@ -600,26 +624,26 @@ int main(int argc, char** argv)
     for (const auto& filename : filenames) {
         sample.setImageFile(filename);
         if (!sample.infer()) {
-            gLogger.reportFail(test);
+            sample::gLogger.reportFail(test);
         }
     }
 
     auto inference_elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now() - inference_begin_time);
 
-    gLogger.reportPass(test);
+    sample::gLogger.reportPass(test);
 
-    gLogInfo << std::endl;
+    sample::gLogInfo << std::endl;
 
-    gLogInfo <<     "totally inference time      : " << inference_elapsed_time.count() / 1000.f << " milliseconds" << std::endl;
+    sample::gLogInfo <<     "totally inference time      : " << inference_elapsed_time.count() / 1000.f << " milliseconds" << std::endl;
     if (filenames.size()) {
-        gLogInfo << "totally inference times     : " << filenames.size() << std::endl;
-        gLogInfo << "average inference time      : " << inference_elapsed_time.count() / filenames.size() / 1000.f << " milliseconds"<< std::endl;
+        sample::gLogInfo << "totally inference times     : " << filenames.size() << std::endl;
+        sample::gLogInfo << "average inference time      : " << inference_elapsed_time.count() / filenames.size() / 1000.f << " milliseconds"<< std::endl;
     }
 
     if (total_inference_execute_times > 0) {
-        gLogInfo << "totally execute elapsed time: " << total_inference_execute_elasped_time / 1000.f << " milliseconds" << std::endl << std::endl;
-        gLogInfo << "inference execute times     : " << total_inference_execute_times << std::endl;
-        gLogInfo << "average execute elapsed time: " << total_inference_execute_elasped_time / total_inference_execute_times / 1000.f << " milliseconds" << std::endl << std::endl;
+        sample::gLogInfo << "totally execute elapsed time: " << total_inference_execute_elasped_time / 1000.f << " milliseconds" << std::endl << std::endl;
+        sample::gLogInfo << "inference execute times     : " << total_inference_execute_times << std::endl;
+        sample::gLogInfo << "average execute elapsed time: " << total_inference_execute_elasped_time / total_inference_execute_times / 1000.f << " milliseconds" << std::endl << std::endl;
     }
 
     return 0;
